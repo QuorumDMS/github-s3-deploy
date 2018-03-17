@@ -178,24 +178,27 @@ function s3put(file, user, repo, cb){
     console.log("Storing " + file.filename);
 
     async.waterfall([
-        function download(callback){
+        function download(callback) {
             //call github for file contents
             console.log("downloading " + file.filename);
-            var params = { user: user, repo: repo, sha: file.sha};
+            var params = { user: user, repo: repo, sha: file.sha };
             github.gitdata.getBlob(params, callback);
         },
-        function store(result, callback){
+        function store(result, callback) {
             //get contents from returned object
             var blob = new Buffer(result.content, 'base64');
             var mimetype = mime.lookup(file.filename);
             var isText = (mime.charsets.lookup(mimetype) == 'UTF-8');
-            if(isText){
+            if (isText) {
                 blob = blob.toString('utf-8');
             }
             console.log("putting " + file.filename + " of type " + mimetype);
-            var putparams = { Bucket: s3bucket, Key: file.filename, Body: blob, ContentType: mimetype};
-
-            s3client.putObject(putparams, callback);
+            var putparams = { Bucket: s3bucket, Key: file.filename, Body: blob, ContentType: mimetype };
+            callback(null, putparams);
+        },
+        function upload(result, callback) {
+            console.log('within putObject funtion.');
+            s3client.putObject(result, callback);
         }
     ],  function done(err){
             if (err){
