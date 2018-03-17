@@ -1,12 +1,3 @@
-/*
-*   GitHub to S3 Pusher: an AWS Lambda function, triggered by Github Webhook via SNS, to
-*   sync changes on commit to an S3 bucket.
-*
-*   Author: Matt Boggie, New York Times R&D Lab
-*   Copyright: The New York Times Company
-*   Version: 0.01, November 2015   
-*/
-
 // dependencies
 var async = require('async');
 var AWS = require('aws-sdk');
@@ -15,7 +6,7 @@ var fs = require('fs');
 var GitHubApi = require('github');
 var mime = require('mime');
 
-var secretfile = "./githubtoken.secret" 
+var secretfile = "./githubtoken.secret"
 // This should be a file containing the github Personal Access Token, encrypted using AWS-KMS and base 64 decoded.
 // See the README for more detail.
 
@@ -26,30 +17,44 @@ var github = new GitHubApi({
     host: "api.github.com"
 });
 
-// get reference to S3 client 
+// get reference to S3 client
 var s3client = new AWS.S3();
-var s3bucket = "internal.nytlabs.com";
- 
+var s3bucket; // set below based on the branch the commit event is in.   "staging-communicator-x";
+
 // This handler is called by the AWS Lambda controller when a new SNS message arrives.
 exports.handler = function(event, context) {
-    
+
 	// get the incoming message
-	var githubEvent = event.Records[0].Sns.Message;
+  var githubEvent = event.Records[0].Sns.Message;
+  console.log(githubEvent)
 	var mesgattr = event.Records[0].Sns.MessageAttributes;
 
     if ((mesgattr.hasOwnProperty('X-Github-Event')) && (mesgattr['X-Github-Event'].Value == "push")) {
         var eventObj = JSON.parse(githubEvent);
+        // If commit event is coming from communicator-builds master then do nothing.
+        if (eventObj.ref.includes('master')) {
+          context.succeed();
+          return;
+      }
+
         var re = new RegExp(/([^\/]*)/);
         var found = re.exec(eventObj.repository.full_name);
         var user = found[0];
         var repo = eventObj.repository.name;
         var sha = eventObj.head_commit.id;
         var repostring = "/repos/"+user+"/"+repo+"/commits/"+sha
-        
-        console.log("DEFINITELY Got a push message. Will get code from: ", repostring);
-        
-        // solution borrowed from http://stackoverflow.com/questions/29372278/aws-lambda-how-to-store-secret-to-external-api
 
+      console.log("DEFINITELY Got a push message. Will get code from: ", repostring);
+
+      console.log(eventObj.ref)
+      if (eventObj.ref.includes('staging')) {
+        s3bucket = 'staging-communicator';
+      } else if(eventObj.ref.includes('demo')){
+        s3bucket = 'demo-communicator';
+      } else if(eventObj.ref.includes('production')){
+        s3bucket = 'quorum-communicator';
+      }
+        // solution borrowed from http://stackoverflow.com/questions/29372278/aws-lambda-how-to-store-secret-to-external-api
         var encryptedSecret = fs.readFileSync(secretfile);
         var token = null;
 
@@ -105,12 +110,12 @@ exports.handler = function(event, context) {
 
 function parseCommit(resobj, user, repo, callback){
     /*
-     *  Brief note: 
+     *  Brief note:
      *      "callback" gets called when the whole commit is parsed
      *      "eachcb" gets called for each file as it completes processing by the iterator,
      *      "wfcb" gets called by each step of the "waterfall" so that actions happen in the right order
      *
-     *  Two of these (eachcb and wfcb) are passed, if appropriate, to the S3 calls so that they can 
+     *  Two of these (eachcb and wfcb) are passed, if appropriate, to the S3 calls so that they can
      *  report their own completion.
      */
 
@@ -139,7 +144,7 @@ function parseCommit(resobj, user, repo, callback){
             }
         }, function(err){
             console.log("I should be all done now. Here's what error says: ", err)
-            callback(err); // 
+            callback(err); //
         });
     }
     else{
@@ -151,7 +156,7 @@ function parseCommit(resobj, user, repo, callback){
 function s3delete(filename, cb){
     console.log("Deleting ", filename);
     var params = { Bucket: s3bucket, Key: filename };
-    
+
     async.waterfall([
         function callDelete(callback){
             s3client.deleteObject(params, callback);
@@ -181,9 +186,9 @@ function s3put(file, user, repo, cb){
         },
         function store(result, callback){
             //get contents from returned object
-            blob = new Buffer(result.content, 'base64');
-            mimetype = mime.lookup(file.filename);
-            isText = (mime.charsets.lookup(mimetype) == 'UTF-8');
+            var blob = new Buffer(result.content, 'base64');
+            var mimetype = mime.lookup(file.filename);
+            var isText = (mime.charsets.lookup(mimetype) == 'UTF-8');
             if(isText){
                 blob = blob.toString('utf-8');
             }
@@ -197,7 +202,7 @@ function s3put(file, user, repo, cb){
                 console.log("Couldn't store " + file.filename + " in bucket " + s3bucket + "; " + err);
             }
             else {
-                console.log("Saved " + file.filename + " to " + s3bucket + " successfully.");                     
+                console.log("Saved " + file.filename + " to " + s3bucket + " successfully.");
             }
             cb(); //not passing err here because I don't want to short circuit processing the rest of the array
         }
